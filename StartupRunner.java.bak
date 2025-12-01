@@ -1,0 +1,100 @@
+package com.example.bfhlqualifier;
+
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.http.*;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.RestTemplate;
+
+import java.util.Map;
+import java.util.HashMap;
+
+@Component
+public class StartupRunner implements CommandLineRunner {
+
+    private final RestTemplate rest = new RestTemplate();
+
+    @Override
+    public void run(String... args) {
+        System.out.println("StartupRunner: starting webhook flow...");
+
+        String generateUrl = "https://bfhldevapigw.healthrx.co.in/hiring/generateWebhook/JAVA";
+        Map<String, String> requestBody = new HashMap<>();
+        requestBody.put("name", "John Doe");
+        requestBody.put("regNo", "22bce9502");    // <- Your regNo
+        requestBody.put("email", "john@example.com");
+
+        try {
+            // 1) Call generateWebhook
+            ResponseEntity<Map> genResp = rest.postForEntity(generateUrl, requestBody, Map.class);
+            System.out.println("generateWebhook HTTP status: " + genResp.getStatusCode());
+            Map body = genResp.getBody();
+            System.out.println("generateWebhook response body: " + body);
+
+            if (body == null) {
+                System.err.println("generateWebhook returned empty body. Aborting.");
+                return;
+            }
+
+            // try several common keys for webhook URL and token
+            String webhookUrl = null;
+            String accessToken = null;
+
+            if (body.containsKey("webhook")) webhookUrl = String.valueOf(body.get("webhook"));
+            if (body.containsKey("webhookUrl")) webhookUrl = String.valueOf(body.get("webhookUrl"));
+            if (body.containsKey("url")) webhookUrl = String.valueOf(body.get("url"));
+            if (body.containsKey("callbackUrl")) webhookUrl = String.valueOf(body.get("callbackUrl"));
+
+            if (body.containsKey("accessToken")) accessToken = String.valueOf(body.get("accessToken"));
+            if (body.containsKey("token")) accessToken = String.valueOf(body.get("token"));
+            if (body.containsKey("jwt")) accessToken = String.valueOf(body.get("jwt"));
+
+            if (webhookUrl == null || accessToken == null) {
+                System.err.println("Could not find webhook URL or access token in response. Keys seen: " + body.keySet());
+                return;
+            }
+
+            // 2) Build final SQL query placeholder (replace later with actual SQL)
+            String finalQuery = "SELECT 1;"; // <-- replace with the real SQL when ready
+
+            // 3) Prepare JSON body for submission
+            Map<String, String> finalBody = new HashMap<>();
+            finalBody.put("finalQuery", finalQuery);
+
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            // Try submission first with raw token (as the PDF implied)
+            headers.set("Authorization", accessToken);
+            HttpEntity<Map<String, String>> finalReq = new HttpEntity<>(finalBody, headers);
+
+            System.out.println("Attempting submission to webhook (raw token) -> " + webhookUrl);
+            try {
+                ResponseEntity<String> submitResp = rest.postForEntity(webhookUrl, finalReq, String.class);
+                System.out.println("Submission response status: " + submitResp.getStatusCode());
+                System.out.println("Submission response body: " + submitResp.getBody());
+            } catch (HttpClientErrorException.Unauthorized ua) {
+                System.out.println("Submission with raw token returned 401. Retrying with 'Bearer ' prefix.");
+                // Retry with Bearer prefix
+                headers.set("Authorization", "Bearer " + accessToken);
+                HttpEntity<Map<String, String>> bearerReq = new HttpEntity<>(finalBody, headers);
+                try {
+                    ResponseEntity<String> submitResp2 = rest.postForEntity(webhookUrl, bearerReq, String.class);
+                    System.out.println("Submission (Bearer) response status: " + submitResp2.getStatusCode());
+                    System.out.println("Submission (Bearer) response body: " + submitResp2.getBody());
+                } catch (Exception ex2) {
+                    System.err.println("Submission with Bearer token failed: " + ex2.getMessage());
+                    ex2.printStackTrace();
+                }
+            } catch (Exception e) {
+                System.err.println("Submission failed: " + e.getMessage());
+                e.printStackTrace();
+            }
+
+            System.out.println("StartupRunner: webhook flow finished.");
+        } catch (Exception e) {
+            System.err.println("Exception during generateWebhook flow: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+}
